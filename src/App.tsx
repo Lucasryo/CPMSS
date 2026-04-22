@@ -196,12 +196,11 @@ export default function App() {
         const profileData = await fetchProfile(user.id);
 
         if (!profileData) {
-          const isAdminEmail = user.email === "lucaszaous@gmail.com";
           const newProfile = {
             id: user.id,
             name: user.user_metadata.full_name || 'Usuário',
             email: user.email || '',
-            role: isAdminEmail ? 'admin' : 'client',
+            role: 'client',
           };
           
           await supabase.from('profiles').insert([newProfile]);
