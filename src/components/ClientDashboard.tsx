@@ -6,6 +6,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { logAudit, sendNotification } from '../lib/audit';
 import { format, addDays } from 'date-fns';
+import { fetchRoomCategories, getRoomCategoryLabel } from '../lib/hotelInventory';
+import { RoomCategory } from '../types';
 
 const FINANCIAL_TYPES = ['FATURA', 'Hospedagem', 'Alimentação', 'Lavanderia', 'Eventos', 'Transporte'];
 
@@ -31,6 +33,7 @@ export default function ClientDashboard({ profile, initialTab = 'active' }: { pr
   const [showReservationForm, setShowReservationForm] = useState(false);
   const [submittingReservation, setSubmittingReservation] = useState(false);
   const [viewingVoucher, setViewingVoucher] = useState<Reservation | ReservationRequest | null>(null);
+  const [roomCategories, setRoomCategories] = useState<RoomCategory[]>([]);
 
   // Reservation form state
   const [reservationForm, setReservationForm] = useState({
@@ -71,6 +74,16 @@ export default function ClientDashboard({ profile, initialTab = 'active' }: { pr
       setActiveTab(isExternalClient ? 'reservations' : 'active');
     }
   }, [isExternalClient, canManageClientArchive, activeTab]);
+
+  useEffect(() => {
+    fetchRoomCategories().then(setRoomCategories);
+  }, []);
+
+  useEffect(() => {
+    if (!roomCategories.length) return;
+    if (roomCategories.some((roomCategory) => roomCategory.code === reservationForm.category)) return;
+    setReservationForm((prev) => ({ ...prev, category: roomCategories[0].code }));
+  }, [roomCategories, reservationForm.category]);
 
   useEffect(() => {
     if (profile.company_id) {
@@ -1261,10 +1274,9 @@ export default function ClientDashboard({ profile, initialTab = 'active' }: { pr
                       onChange={(e) => setReservationForm({...reservationForm, category: e.target.value})}
                       className="w-full px-4 py-3 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/5 transition-all"
                     >
-                      <option value="executivo">Executivo</option>
-                      <option value="premium">Premium</option>
-                      <option value="luxo">Luxo</option>
-                      <option value="suite">Suíte Presidencial</option>
+                      {roomCategories.map((roomCategory) => (
+                        <option key={roomCategory.code} value={roomCategory.code}>{roomCategory.label}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -1445,7 +1457,7 @@ export default function ClientDashboard({ profile, initialTab = 'active' }: { pr
                    <div className="space-y-4">
                       <div>
                         <p className="text-[10px] text-neutral-400 font-black uppercase tracking-widest mb-1">Categoria de UH</p>
-                        <p className="font-black text-neutral-900 uppercase">{viewingVoucher.category}</p>
+                        <p className="font-black text-neutral-900 uppercase">{getRoomCategoryLabel(viewingVoucher.category, roomCategories)}</p>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div>

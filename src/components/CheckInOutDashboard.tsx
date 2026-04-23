@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
-import { UserProfile, Reservation, Company } from '../types';
+import { UserProfile, Reservation, Company, Room, RoomCategory } from '../types';
 import { LogIn, LogOut, Receipt, Loader2, Search, User, Hash, Building2, CalendarDays, X as CloseIcon, Bed, Check, AlertCircle, Plus, Trash2, DollarSign, Printer, FileText, UserPlus, Phone, IdCard, Settings, ArrowRightLeft, RotateCcw, Briefcase, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
@@ -8,31 +8,15 @@ import { format, differenceInCalendarDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { logAudit } from '../lib/audit';
 import { hasPermission } from '../lib/permissions';
+import { fetchRoomCategories, getRoomCategoryLabel, normalizeRoomCategory } from '../lib/hotelInventory';
 
 type SubTab = 'checkin' | 'contas' | 'historico' | 'configuracoes';
 
 type ConfigSubTab = 'especiais' | 'reabrir' | 'transfer-uh' | 'transfer-lanc';
 
-type Room = {
-  id: string;
-  room_number: string;
-  floor: number;
-  category: string;
-  status: 'available' | 'occupied' | 'maintenance' | 'reserved';
-  is_virtual?: boolean;
-};
-
 const SYSTEM_RESERVATION_CODES = new Set(['SYS-CC', 'SYS-ADM']);
 const VIRTUAL_ROOM_NUMBERS = new Set(['CC', 'ADM']);
 
-const normalizeCategory = (c: string) =>
-  (c || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-
-const CATEGORY_LABELS: Record<string, string> = {
-  executivo: 'Executivo',
-  master: 'Master',
-  'suite presidencial': 'Suíte Presidencial',
-};
 
 type ChargeType = 'diaria' | 'servico' | 'alimento' | 'bebida' | 'lavanderia' | 'estorno' | 'outro';
 
@@ -79,6 +63,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [roomCategories, setRoomCategories] = useState<RoomCategory[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [checkinTarget, setCheckinTarget] = useState<Reservation | null>(null);
   const [folioTarget, setFolioTarget] = useState<Reservation | null>(null);
@@ -530,6 +515,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
       .channel('checkinout-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, fetchAll)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, fetchAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_categories' }, fetchAll)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'folio_charges' }, fetchAll)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -537,16 +523,18 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
 
   async function fetchAll() {
     setLoading(true);
-    const [resRes, compRes, roomRes, chRes] = await Promise.all([
+    const [resRes, compRes, roomRes, chRes, categoryRes] = await Promise.all([
       supabase.from('reservations').select('*').order('check_in', { ascending: true }),
       supabase.from('companies').select('*'),
       supabase.from('rooms').select('*').order('room_number'),
       supabase.from('folio_charges').select('*').order('charge_date', { ascending: true }),
+      fetchRoomCategories(),
     ]);
     if (resRes.data) setReservations(resRes.data as Reservation[]);
     if (compRes.data) setCompanies(compRes.data as Company[]);
     if (roomRes.data) setRooms(roomRes.data as Room[]);
     if (chRes.data) setAllCharges(chRes.data as FolioCharge[]);
+    setRoomCategories(categoryRes);
     setLoading(false);
   }
 
@@ -684,6 +672,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
           reservations={reservations}
           systemReservations={systemReservations}
           rooms={physicalRooms}
+          roomCategories={roomCategories}
           allCharges={allCharges}
           companyName={companyName}
           onOpenFolio={setFolioTarget}
@@ -805,6 +794,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
             reservation={checkinTarget}
             companyName={companyName(checkinTarget.company_id)}
             rooms={physicalRooms}
+            roomCategories={roomCategories}
             onCancel={() => setCheckinTarget(null)}
             onConfirm={handleCheckIn}
           />
@@ -844,6 +834,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
             charges={chargesOf(notaTarget.id)}
             total={folioTotal(notaTarget.id)}
             mode={notaMode}
+            roomCategories={roomCategories}
             onClose={() => setNotaTarget(null)}
           />
         )}
@@ -851,6 +842,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
           <WalkInModal
             companies={companies}
             rooms={physicalRooms}
+            roomCategories={roomCategories}
             onCancel={() => setWalkInOpen(false)}
             onConfirm={handleWalkIn}
           />
@@ -1137,17 +1129,18 @@ function FolioModal({
 }
 
 function CheckInModal({
-  reservation, companyName, rooms, onCancel, onConfirm,
+  reservation, companyName, rooms, roomCategories, onCancel, onConfirm,
 }: {
   reservation: Reservation;
   companyName: string;
   rooms: Room[];
+  roomCategories: RoomCategory[];
   onCancel: () => void;
   onConfirm: (res: Reservation, roomNumber: string, checkedInAt: string) => Promise<void> | void;
 }) {
-  const desiredCat = normalizeCategory(reservation.category || '');
+  const desiredCat = normalizeRoomCategory(reservation.category || '');
   const available = rooms.filter(
-    r => r.status === 'available' && normalizeCategory(r.category) === desiredCat
+    r => r.status === 'available' && normalizeRoomCategory(r.category) === desiredCat
   );
 
   const [selectedRoom, setSelectedRoom] = useState<string>('');
@@ -1218,7 +1211,7 @@ function CheckInModal({
               <div>
                 <p className="text-[9px] font-bold uppercase text-neutral-400 tracking-widest">Categoria</p>
                 <p className="text-sm font-bold text-neutral-900">
-                  {CATEGORY_LABELS[desiredCat] || reservation.category || '—'}
+                  {getRoomCategoryLabel(reservation.category || '', roomCategories)}
                 </p>
               </div>
               <div>
@@ -1247,7 +1240,7 @@ function CheckInModal({
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
-                Quartos disponíveis {CATEGORY_LABELS[desiredCat] ? `· ${CATEGORY_LABELS[desiredCat]}` : ''}
+                Quartos disponíveis {desiredCat ? `· ${getRoomCategoryLabel(desiredCat, roomCategories)}` : ''}
               </label>
               <span className="text-[10px] font-bold text-neutral-400">
                 {available.length} livre{available.length === 1 ? '' : 's'}
@@ -1473,12 +1466,13 @@ function CheckOutModal({
 }
 
 function NotaHospedagemModal({
-  reservation, companyName, charges, total, onClose, mode = 'final',
+  reservation, companyName, charges, total, roomCategories, onClose, mode = 'final',
 }: {
   reservation: Reservation;
   companyName: string;
   charges: FolioCharge[];
   total: number;
+  roomCategories: RoomCategory[];
   onClose: () => void;
   mode?: 'final' | 'extract';
 }) {
@@ -1636,7 +1630,7 @@ function NotaHospedagemModal({
                 </div>
                 <div className="flex">
                   <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Categoria</span>
-                  <span className="text-neutral-900">{CATEGORY_LABELS[normalizeCategory(reservation.category || '')] || reservation.category || '—'}</span>
+                  <span className="text-neutral-900">{getRoomCategoryLabel(reservation.category || '', roomCategories)}</span>
                 </div>
                 <div className="flex">
                   <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Entrada</span>
@@ -1780,10 +1774,11 @@ function NotaHospedagemModal({
 }
 
 function WalkInModal({
-  companies, rooms, onCancel, onConfirm,
+  companies, rooms, roomCategories, onCancel, onConfirm,
 }: {
   companies: Company[];
   rooms: Room[];
+  roomCategories: RoomCategory[];
   onCancel: () => void;
   onConfirm: (data: {
     guest_name: string;
@@ -1824,8 +1819,15 @@ function WalkInModal({
   const nights = Math.max(1, differenceInCalendarDays(new Date(checkOut), new Date(checkIn)));
   const forecast = nights * tariff;
 
+  useEffect(() => {
+    if (!roomCategories.length) return;
+    if (roomCategories.some((roomCategory) => roomCategory.code === category)) return;
+    setCategory(roomCategories[0].code);
+    setSelectedRoom('');
+  }, [roomCategories, category]);
+
   const available = rooms.filter(
-    r => r.status === 'available' && normalizeCategory(r.category) === normalizeCategory(category)
+    r => r.status === 'available' && normalizeRoomCategory(r.category) === normalizeRoomCategory(category)
   );
   const byFloor = available.reduce<Record<number, Room[]>>((acc, r) => {
     (acc[r.floor] ??= []).push(r);
@@ -1987,9 +1989,9 @@ function WalkInModal({
                   onChange={(e) => { setCategory(e.target.value); setSelectedRoom(''); }}
                   className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
                 >
-                  <option value="executivo">Executivo</option>
-                  <option value="master">Master</option>
-                  <option value="suite presidencial">Suíte Presidencial</option>
+                  {roomCategories.map((roomCategory) => (
+                    <option key={roomCategory.code} value={roomCategory.code}>{roomCategory.label}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -2060,7 +2062,7 @@ function WalkInModal({
           <div>
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
-                Quartos disponíveis · {CATEGORY_LABELS[normalizeCategory(category)]}
+                Quartos disponíveis · {getRoomCategoryLabel(category, roomCategories)}
               </h4>
               <span className="text-[10px] font-bold text-neutral-400">
                 {available.length} livre{available.length === 1 ? '' : 's'}
@@ -2135,7 +2137,7 @@ function ConfiguracoesUHSection({
   configTab, setConfigTab,
   ccReservation, admReservation,
   reservations, systemReservations,
-  rooms, allCharges,
+  rooms, roomCategories, allCharges,
   companyName,
   onOpenFolio, onReopen, onTransferRoom, onTransferCharges,
   canManageFolio, canReopenAccounts, canTransferRoom, canTransferCharges,
@@ -2147,6 +2149,7 @@ function ConfiguracoesUHSection({
   reservations: Reservation[];
   systemReservations: Reservation[];
   rooms: Room[];
+  roomCategories: RoomCategory[];
   allCharges: FolioCharge[];
   companyName: (id: string) => string;
   onOpenFolio: (r: Reservation) => void;
@@ -2203,6 +2206,7 @@ function ConfiguracoesUHSection({
         <TransferirUHPanel
           reservations={reservations}
           rooms={rooms}
+          roomCategories={roomCategories}
           companyName={companyName}
           onTransfer={onTransferRoom}
           disabled={!canTransferRoom}
@@ -2433,10 +2437,11 @@ function ReabrirContaPanel({
 }
 
 function TransferirUHPanel({
-  reservations, rooms, companyName, onTransfer, disabled = false,
+  reservations, rooms, roomCategories, companyName, onTransfer, disabled = false,
 }: {
   reservations: Reservation[];
   rooms: Room[];
+  roomCategories: RoomCategory[];
   companyName: (id: string) => string;
   onTransfer: (r: Reservation, newRoom: string, reason: string) => Promise<void> | void;
   disabled?: boolean;
@@ -2448,10 +2453,10 @@ function TransferirUHPanel({
   const [submitting, setSubmitting] = useState(false);
 
   const source = active.find(r => r.id === sourceId) || null;
-  const desiredCat = source ? normalizeCategory(source.category || '') : '';
+  const desiredCat = source ? normalizeRoomCategory(source.category || '') : '';
   const available = rooms.filter(
     r => (r.status === 'available' || r.room_number === source?.room_number) &&
-      (desiredCat ? normalizeCategory(r.category) === desiredCat : true)
+      (desiredCat ? normalizeRoomCategory(r.category) === desiredCat : true)
   );
 
   async function confirm() {
@@ -2514,7 +2519,7 @@ function TransferirUHPanel({
             </div>
             <div>
               <p className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest">Categoria</p>
-              <p className="text-sm font-bold text-neutral-900">{CATEGORY_LABELS[desiredCat] || source.category || '—'}</p>
+              <p className="text-sm font-bold text-neutral-900">{getRoomCategoryLabel(source.category || '', roomCategories)}</p>
             </div>
             <div>
               <p className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest">Código</p>
@@ -2525,7 +2530,7 @@ function TransferirUHPanel({
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
-                Nova UH {CATEGORY_LABELS[desiredCat] ? `· ${CATEGORY_LABELS[desiredCat]}` : ''}
+                Nova UH {desiredCat ? `· ${getRoomCategoryLabel(desiredCat, roomCategories)}` : ''}
               </label>
               <span className="text-[10px] font-bold text-neutral-400">
                 {available.length} opção{available.length === 1 ? '' : 'es'}

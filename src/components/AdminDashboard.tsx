@@ -16,6 +16,7 @@ import StaffManager from './StaffManager';
 import GuestManager from './GuestManager';
 import InvoiceTracker from './InvoiceTracker';
 import ProfileAccessMatrix from './ProfileAccessMatrix';
+import HotelStructureManager from './HotelStructureManager';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { DEFAULT_PERMISSIONS } from '../lib/defaultPermissions';
 
@@ -37,7 +38,7 @@ const formatAuditDetails = (details: unknown) => {
 
 export default function AdminDashboard({ profile, initialTab = 'documents' }: { 
   profile: UserProfile, 
-  initialTab?: 'documents' | 'banks' | 'finance' | 'assembly' | 'bi' | 'tariffs' | 'companies' | 'users' | 'guests' | 'stats' | 'tracking' | 'registration'
+  initialTab?: 'documents' | 'banks' | 'finance' | 'assembly' | 'bi' | 'tariffs' | 'companies' | 'users' | 'guests' | 'stats' | 'tracking' | 'registration' | 'hotel'
 }) {
   const isFinancePowerUser = profile.role === 'admin' || profile.role === 'finance';
   const isBillingOperator = profile.role === 'faturamento';
@@ -1417,7 +1418,7 @@ export default function AdminDashboard({ profile, initialTab = 'documents' }: {
         </div>
       )}
 
-      {((profile.role === 'admin' || profile.role === 'faturamento' || profile.role === 'finance' || profile.role === 'reservations' || profile.permissions?.canViewTariffs) && ['documents', 'banks', 'finance', 'bi', 'assembly', 'tariffs', 'registration', 'companies', 'users'].includes(initialTab)) && (
+      {((profile.role === 'admin' || profile.role === 'faturamento' || profile.role === 'finance' || profile.role === 'reservations' || profile.permissions?.canViewTariffs) && ['documents', 'banks', 'finance', 'bi', 'assembly', 'tariffs', 'registration', 'companies', 'users', 'hotel'].includes(initialTab)) && (
       <div className="flex gap-1 p-1 bg-neutral-100 rounded-xl w-fit mb-6">
         {/* Sub-tabs for main "Finance" context */}
         {initialTab === 'finance' && (
@@ -1531,6 +1532,51 @@ export default function AdminDashboard({ profile, initialTab = 'documents' }: {
               }`}
             >
               Tarifario
+            </button>
+            <button
+              onClick={() => setActiveTab('hotel')}
+              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'hotel'
+                  ? 'bg-white text-neutral-900 shadow-sm'
+                  : 'text-neutral-500 hover:text-neutral-700'
+              }`}
+            >
+              Estrutura Hotel
+            </button>
+          </>
+        )}
+
+        {initialTab === 'hotel' && (
+          <>
+            <button
+              onClick={() => setActiveTab('hotel')}
+              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'hotel'
+                  ? 'bg-white text-neutral-900 shadow-sm'
+                  : 'text-neutral-500 hover:text-neutral-700'
+              }`}
+            >
+              Estrutura Hotel
+            </button>
+            <button
+              onClick={() => setActiveTab('tariffs')}
+              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'tariffs'
+                  ? 'bg-white text-neutral-900 shadow-sm'
+                  : 'text-neutral-500 hover:text-neutral-700'
+              }`}
+            >
+              Tarifario
+            </button>
+            <button
+              onClick={() => setActiveTab('companies')}
+              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'companies'
+                  ? 'bg-white text-neutral-900 shadow-sm'
+                  : 'text-neutral-500 hover:text-neutral-700'
+              }`}
+            >
+              Empresas
             </button>
           </>
         )}
@@ -3315,6 +3361,15 @@ export default function AdminDashboard({ profile, initialTab = 'documents' }: {
         exit={{ opacity: 0, y: -20 }}
       >
         <StaffManager currentUser={profile} />
+      </motion.div>
+    ) : activeTab === 'hotel' ? (
+      <motion.div
+        key="hotel"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+      >
+        <HotelStructureManager profile={profile} />
       </motion.div>
     ) : activeTab === 'guests' ? (
       <motion.div

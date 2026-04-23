@@ -68,6 +68,28 @@ export interface Company {
   status?: 'active' | 'inactive';
 }
 
+export interface RoomCategory {
+  id?: string;
+  code: string;
+  label: string;
+  description?: string;
+  sort_order?: number;
+  active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Room {
+  id: string;
+  room_number: string;
+  floor: number;
+  category: string;
+  status: 'available' | 'occupied' | 'maintenance' | 'reserved';
+  is_virtual?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface UserPermissions {
   canViewDashboard: boolean;
   canViewReservations: boolean;

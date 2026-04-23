@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabase';
-import { UserProfile, Reservation, Company, ReservationRequest, FiscalFile, AuditLog } from '../types';
+import { UserProfile, Reservation, Company, ReservationRequest, FiscalFile, AuditLog, Room, RoomCategory } from '../types';
 import { Plus, Search, Calendar, ChevronLeft, ChevronRight, User, Hash, Clock, CheckCircle, XCircle, MoreVertical, Filter, Loader2, X as CloseIcon, Check, X, LogOut, FileText, Printer, ArrowRightCircle, Receipt, Hotel, History } from 'lucide-react';
 import ReservationVoucher from './ReservationVoucher';
 import { toast } from 'sonner';
@@ -9,6 +9,7 @@ import { format, addDays, startOfToday, isSameDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { logAudit, sendNotification } from '../lib/audit';
 import { hasPermission } from '../lib/permissions';
+import { fetchRoomCategories, getRoomCategoryLabel } from '../lib/hotelInventory';
 
 const slugifySegment = (value: string) =>
   value
@@ -105,6 +106,8 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationRequests, setReservationRequests] = useState<ReservationRequest[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [roomCategories, setRoomCategories] = useState<RoomCategory[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [files, setFiles] = useState<FiscalFile[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -138,6 +141,24 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
     payment_method: 'BILLED' as 'BILLED' | 'VIRTUAL_CARD'
   });
 
+  const physicalRooms = rooms.filter((room) => !room.is_virtual);
+  const availableReservationRooms = physicalRooms.filter(
+    (room) => room.status === 'available' && (!formData.category || room.category === formData.category)
+  );
+
+  useEffect(() => {
+    if (!roomCategories.length) return;
+    if (roomCategories.some((roomCategory) => roomCategory.code === formData.category)) return;
+    setFormData((prev) => ({ ...prev, category: roomCategories[0].code }));
+  }, [roomCategories, formData.category]);
+
+  useEffect(() => {
+    if (!formData.room_number) return;
+    const selectedRoom = physicalRooms.find((room) => room.room_number === formData.room_number);
+    if (selectedRoom && selectedRoom.category === formData.category) return;
+    setFormData((prev) => ({ ...prev, room_number: '' }));
+  }, [formData.category, formData.room_number, physicalRooms]);
+
   useEffect(() => {
     fetchData();
     const resChannel = supabase.channel('reservations-sync').on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, fetchData).subscribe();
@@ -154,13 +175,15 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
 
   async function fetchData() {
     setLoading(true);
-    const [resResult, compResult, reqResult, usersResult, filesResult, auditResult] = await Promise.all([
+    const [resResult, compResult, reqResult, usersResult, filesResult, auditResult, roomsResult, roomCategoriesResult] = await Promise.all([
       supabase.from('reservations').select('*').order('check_in'),
       supabase.from('companies').select('*').order('name'),
       supabase.from('reservation_requests').select('*').order('created_at', { ascending: false }),
       supabase.from('profiles').select('*'),
       supabase.from('files').select('*'),
-      supabase.from('audit_logs').select('*').order('timestamp', { ascending: false }).limit(300)
+      supabase.from('audit_logs').select('*').order('timestamp', { ascending: false }).limit(300),
+      supabase.from('rooms').select('*').order('room_number'),
+      fetchRoomCategories(),
     ]);
 
     if (resResult.data) setReservations(resResult.data);
@@ -169,6 +192,8 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
     if (usersResult.data) setUsers(usersResult.data);
     if (filesResult.data) setFiles(filesResult.data as FiscalFile[]);
     if (auditResult.data) setAuditLogs(auditResult.data as AuditLog[]);
+    if (roomsResult.data) setRooms(roomsResult.data as Room[]);
+    setRoomCategories(roomCategoriesResult);
     setLoading(false);
   }
 
@@ -448,7 +473,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
       reservation_code: '',
       cost_center: '',
       tariff: 0,
-      category: 'executivo',
+      category: roomCategories[0]?.code || 'executivo',
       guests_per_uh: 1,
       contact_phone: '',
       iss_tax: 5,
@@ -827,7 +852,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
                       <p className="text-xs text-neutral-500 font-medium">Solicitado por: {req.requested_by} ({companies.find(c => c.id === req.company_id)?.name})</p>
                       <div className="flex items-center gap-3 mt-1">
                         <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-tighter">REF: {req.reservation_code}</span>
-                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded truncate">{req.category}</span>
+                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded truncate">{getRoomCategoryLabel(req.category, roomCategories)}</span>
                       </div>
                     </div>
                   </div>
@@ -900,7 +925,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
                     <td className="px-6 py-4">
                       <div className="flex flex-col">
                         <span className="text-sm font-bold text-neutral-900">{res.guest_name}</span>
-                        <span className="text-[10px] text-neutral-400 uppercase font-medium">{res.category}</span>
+                        <span className="text-[10px] text-neutral-400 uppercase font-medium">{getRoomCategoryLabel(res.category, roomCategories)}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -1089,7 +1114,26 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
                     <label className="text-[10px] font-bold text-neutral-500 uppercase">Número do Quarto</label>
                     <div className="relative">
                       <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                      <input required value={formData.room_number} onChange={e => setFormData({ ...formData, room_number: e.target.value })} className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm" placeholder="Ex: 101" />
+                      <select
+                        required
+                        value={formData.room_number}
+                        onChange={e => {
+                          const selectedRoom = physicalRooms.find((room) => room.room_number === e.target.value);
+                          setFormData({
+                            ...formData,
+                            room_number: e.target.value,
+                            category: selectedRoom?.category || formData.category,
+                          });
+                        }}
+                        className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm"
+                      >
+                        <option value="">Selecione a UH</option>
+                        {availableReservationRooms.map((room) => (
+                          <option key={room.id} value={room.room_number}>
+                            UH {room.room_number} · {getRoomCategoryLabel(room.category, roomCategories)}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                   <div className="space-y-1">
@@ -1112,6 +1156,18 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-neutral-500 uppercase">Tarifa Diária (R$)</label>
                     <input type="number" step="0.01" value={formData.tariff} onChange={e => setFormData({ ...formData, tariff: parseFloat(e.target.value) })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Categoria</label>
+                    <select
+                      value={formData.category}
+                      onChange={e => setFormData({ ...formData, category: e.target.value })}
+                      className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm"
+                    >
+                      {roomCategories.map((roomCategory) => (
+                        <option key={roomCategory.code} value={roomCategory.code}>{roomCategory.label}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
                 <div className="flex gap-3 pt-4 border-t border-neutral-100">

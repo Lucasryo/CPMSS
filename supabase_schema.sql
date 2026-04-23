@@ -93,6 +93,40 @@ create table if not exists public.tariffs (
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+create table if not exists public.room_categories (
+  id uuid default gen_random_uuid() primary key,
+  code text not null unique,
+  label text not null,
+  description text,
+  sort_order integer default 100,
+  active boolean default true,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+create table if not exists public.rooms (
+  id uuid default gen_random_uuid() primary key,
+  room_number text not null unique,
+  floor integer not null default 1,
+  category text not null,
+  status text not null default 'available',
+  is_virtual boolean default false,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+insert into public.room_categories (code, label, description, sort_order, active)
+values
+  ('executivo', 'Executivo', 'Categoria padrao para hospedagem corporativa.', 10, true),
+  ('master', 'Master', 'Categoria intermediaria para hospedagens com maior conforto.', 20, true),
+  ('suite presidencial', 'Suite Presidencial', 'Categoria premium para hospedagens especiais.', 30, true)
+on conflict (code) do update
+set
+  label = excluded.label,
+  description = excluded.description,
+  sort_order = excluded.sort_order,
+  active = excluded.active;
+
 -- Helpers
 create or replace function public.handle_updated_at()
 returns trigger
@@ -113,6 +147,18 @@ execute function public.handle_updated_at();
 drop trigger if exists set_tariffs_updated_at on public.tariffs;
 create trigger set_tariffs_updated_at
 before update on public.tariffs
+for each row
+execute function public.handle_updated_at();
+
+drop trigger if exists set_room_categories_updated_at on public.room_categories;
+create trigger set_room_categories_updated_at
+before update on public.room_categories
+for each row
+execute function public.handle_updated_at();
+
+drop trigger if exists set_rooms_updated_at on public.rooms;
+create trigger set_rooms_updated_at
+before update on public.rooms
 for each row
 execute function public.handle_updated_at();
 
@@ -211,6 +257,8 @@ alter table public.audit_logs enable row level security;
 alter table public.notifications enable row level security;
 alter table public.bank_accounts enable row level security;
 alter table public.tariffs enable row level security;
+alter table public.room_categories enable row level security;
+alter table public.rooms enable row level security;
 
 -- Profiles policies
 drop policy if exists "Public profiles are viewable by everyone." on public.profiles;
@@ -319,6 +367,26 @@ create policy "Admins and reservations can manage tariffs" on public.tariffs
     public.current_user_is_admin()
     or public.current_user_role() = 'reservations'
   );
+
+-- Room categories policies
+drop policy if exists "Room categories are viewable by authenticated users" on public.room_categories;
+create policy "Room categories are viewable by authenticated users" on public.room_categories
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "Only admins can manage room categories" on public.room_categories;
+create policy "Only admins can manage room categories" on public.room_categories
+  for all using (public.current_user_is_admin())
+  with check (public.current_user_is_admin());
+
+-- Rooms policies
+drop policy if exists "Rooms are viewable by authenticated users" on public.rooms;
+create policy "Rooms are viewable by authenticated users" on public.rooms
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "Only admins can manage rooms" on public.rooms;
+create policy "Only admins can manage rooms" on public.rooms
+  for all using (public.current_user_is_admin())
+  with check (public.current_user_is_admin());
 
 -- Storage policies
 -- Create the "files" bucket before applying these policies.
